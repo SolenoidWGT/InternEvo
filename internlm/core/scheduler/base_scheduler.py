@@ -61,6 +61,9 @@ class BaseScheduler(ABC):
             micro_batch_data["cu_seqlens"] = micro_batch_data["cu_seqlens"].squeeze(0)
             # The indexes are used to indicate the actual position IDs of each token in the packed input.
             indexes = indexes[0]
+
+            # squeeze the dim of micro num.
+            micro_batch_data["input_ids"] = micro_batch_data["input_ids"].squeeze(0)
         else:
             micro_batch_data = {k: v[offset] for k, v in data.items()}
             micro_batch_label = label[offset]
@@ -68,15 +71,12 @@ class BaseScheduler(ABC):
             micro_batch_data.pop("cu_seqlens", None)
             micro_batch_data.pop("indexes", None)
 
-        # squeeze the dim of micro num.
-        micro_batch_data["input_ids"] = micro_batch_data["input_ids"].squeeze(0)
-
         if "DEBUG_DATA_SHAPE" in os.environ:
             print(
                 f"offset: {offset}, \
 attention_mask: {micro_batch_data['attention_mask'].shape},\
 bsz_stride:{bsz_stride}, input_ids: {micro_batch_data['input_ids'].shape},\
-label: {micro_batch_data['label'].shape}",
+label: {micro_batch_label.shape}",
                 flush=True,
             )
 

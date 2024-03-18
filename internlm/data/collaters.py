@@ -1,6 +1,8 @@
 #!/usr/bin/env python
 # -*- encoding: utf-8 -*-
 
+import os
+
 import numpy as np
 import torch
 
@@ -171,7 +173,9 @@ def packed_collate_fn_npu(batch, packed_length, eos_token):
     if len(set(map(len, cu_seqlens))) == 1:  # if has uniform length, then stack to save device transfer time
         cu_seqlens = torch.stack(cu_seqlens, dim=0)
 
-    # print(f"attention_mask: {attention_mask.shape}, {attention_mask}, cu_seqlens: {cu_seqlens}, indexes: {indexes.shape}, type_ids: {ts.shape}", flush=True)
+    #     print(f"input_ids: {xs.shape}, mask nums: {len(attention_mask_micro_num_list)}, \
+    # one mask shape: {attention_mask.shape}, cu_seqlens: {cu_seqlens.shape}, type_ids: {ts.shape}", flush=True)
+
     return {
         "input_ids": xs,
         "type_ids": ts,
