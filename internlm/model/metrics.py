@@ -2,16 +2,14 @@ from typing import Callable, List, Optional
 
 import torch
 from torch import nn
-# from torch_scatter import scatter
-from internlm.utils.common import get_current_device
+
 from internlm.core.context import ParallelMode
 from internlm.core.context import global_context as gpc
-from internlm.utils.common import SchedulerHook
+
+# from torch_scatter import scatter
+from internlm.utils.common import SchedulerHook, get_current_device
 from internlm.utils.megatron_timers import megatron_timer as timer
 
-
-
-from typing import Optional
 
 def broadcast(src: torch.Tensor, other: torch.Tensor, dim: int):
     if dim < 0:
@@ -25,9 +23,14 @@ def broadcast(src: torch.Tensor, other: torch.Tensor, dim: int):
     return src
 
 
-def scatter_sum(src: torch.Tensor, index: torch.Tensor, dim: int = -1,
-                out: Optional[torch.Tensor] = None,
-                dim_size: Optional[int] = None, reduce = None) -> torch.Tensor:
+def scatter_sum(
+    src: torch.Tensor,
+    index: torch.Tensor,
+    dim: int = -1,
+    out: Optional[torch.Tensor] = None,
+    dim_size: Optional[int] = None,
+    reduce=None,
+) -> torch.Tensor:
     index = broadcast(index, src, dim)
     if out is None:
         size = list(src.size())
@@ -41,8 +44,6 @@ def scatter_sum(src: torch.Tensor, index: torch.Tensor, dim: int = -1,
         return out.scatter_add_(dim, index, src)
     else:
         return out.scatter_add_(dim, index, src)
-
-
 
 
 class AccPerplex:
@@ -86,6 +87,9 @@ class AccPerplex:
     def set_current_type_ids(self, type_ids: torch.Tensor):
         self.batch_shift = 0
         self.type_ids = type_ids.to(get_current_device())
+
+    def set_cu_seqlens(self, cu_seqlens: List):
+        self.cu_seqlens = cu_seqlens
 
     def __call__(self, logits, labels):
         return self.update(logits, labels, type_ids=self.type_ids)
@@ -185,7 +189,6 @@ class AccPerplex:
 
             total_log_probs = -(pred_exp_logits / sum_exp_logits).log().masked_fill(shift_labels.eq(-100), 0).sum()
             self.total_log_probs += total_log_probs
-
 
     def get_metric(self, reset=True):
         if gpc.is_no_pp_or_last_stage() and self.dp_pg is not None:

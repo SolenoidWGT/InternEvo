@@ -12,10 +12,9 @@ from internlm.accelerator import internlm_accelerator
 from internlm.core.context import ParallelMode
 from internlm.core.context import global_context as gpc
 from internlm.core.engine import Engine
-from internlm.utils.common import SchedulerHook, conditional_context
+from internlm.utils.common import SchedulerHook, conditional_context, get_current_device
 from internlm.utils.logger import get_logger
 from internlm.utils.timeout import llm_timeout
-from internlm.utils.common import get_current_device
 
 from .base_scheduler import BaseScheduler
 
@@ -129,9 +128,7 @@ class NonPipelineScheduler(BaseScheduler):
                 moe_loss = (
                     sum(moe_losses) * gpc.config.loss.moe_loss_coeff
                     if hasattr(gpc.config.model, "num_experts") and gpc.config.model.num_experts > 1
-                    else torch.tensor(
-                        0.0, device=get_current_device(), dtype=gpc.config.model.get("dtype")
-                    )
+                    else torch.tensor(0.0, device=get_current_device(), dtype=gpc.config.model.get("dtype"))
                 )
                 # the moe_loss is computed among the "tensor" group if sequence parallel is enabled,
                 # so we need to do allreduce

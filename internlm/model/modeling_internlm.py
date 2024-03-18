@@ -181,7 +181,9 @@ class PackedFlashBaseLayer1D(nn.Module):
                     else:
                         normal_(std=0.006 if "fc1" in name else 0.0015)(param.data)
 
-    def forward(self, hidden_states, cu_seqlens=None, indexes=None, inference_params=None, max_seqlen=None, attention_mask=None):
+    def forward(
+        self, hidden_states, cu_seqlens=None, indexes=None, inference_params=None, max_seqlen=None, attention_mask=None
+    ):
         if self.checkpoint and self.training:
             return activation_checkpoint(
                 self._forward, False, hidden_states, cu_seqlens, indexes, inference_params, max_seqlen, attention_mask
@@ -189,7 +191,15 @@ class PackedFlashBaseLayer1D(nn.Module):
         else:
             return self._forward(hidden_states, cu_seqlens, indexes, inference_params, max_seqlen, attention_mask)
 
-    def _forward(self, hidden_states=None, cu_seqlens=None, indexes=None, inference_params=None, max_seqlen=None, attention_mask=None):
+    def _forward(
+        self,
+        hidden_states=None,
+        cu_seqlens=None,
+        indexes=None,
+        inference_params=None,
+        max_seqlen=None,
+        attention_mask=None,
+    ):
         r"""Pass the input through the encoder layer.
 
         Args:
@@ -386,7 +396,22 @@ class PackedFlashInternLm1D(nn.Module):
         self.parallel_output = parallel_output
         self.attention_mask = None
 
-    def forward(self, hidden_states=None, cu_seqlens=None, input_ids=None, indexes=None, inference_params=None, attention_mask=None):
+    def forward(
+        self,
+        hidden_states=None,
+        cu_seqlens=None,
+        input_ids=None,
+        indexes=None,
+        inference_params=None,
+        attention_mask=None,
+        max_seqlen=None,
+    ):
+        if cu_seqlens is not None:
+            cu_seqlens = cu_seqlens[0].to(hidden_states.device)
+            max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
+            if gpc.config.parallel.sequence_parallel and self.tp_mode == "isp":
+                indexes = split_forward_gather_backward(indexes, ParallelMode.TENSOR, dim=0)
+
         # attention_mask: compute attention on the places where the value is 1
         if attention_mask is not None:
             self.attention_mask = attention_mask
@@ -397,28 +422,8 @@ class PackedFlashInternLm1D(nn.Module):
                 hidden_states = (
                     self.embed_grad_scale * hidden_states + (1 - self.embed_grad_scale) * hidden_states.detach()
                 )
-        if isinstance(cu_seqlens, list):
-            assert len(cu_seqlens) == 1
-            cu_seqlens = cu_seqlens[0].to(hidden_states.device)
 
-        if cu_seqlens is not None:
-            cu_seqlens = cu_seqlens.squeeze(0)
-        
-        if cu_seqlens is not None or self.attention_mask is not None:
-            hidden_states = hidden_states.squeeze(0)  # If cu_seqlens is passed in，it indicated a packed state，
-            # the batch dimension with a size of 1 should be directly squeezed off.
-
-        if indexes is not None:
-            assert len(indexes) == 1
-            # The indexes are used to indicate the actual position IDs of each token in the packed input.
-            indexes = indexes[0]
-            # if the sequence parallel mode is 'isp', the indexes should also be split in sequence dimension.
-            if gpc.config.parallel.sequence_parallel and self.tp_mode == "isp":
-                indexes = split_forward_gather_backward(indexes, ParallelMode.TENSOR, dim=0)
-
-        max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item() if cu_seqlens is not None else None
-
-        for _, block in enumerate(self.blocks):
+        for idx, block in enumerate(self.blocks):
             hidden_states = block(
                 hidden_states,
                 cu_seqlens=cu_seqlens,
@@ -452,7 +457,7 @@ def _build_generic_model_1d(num_layers, num_chunks, device=None, **kwargs):
         device (Optional[Union[str, torch.device]]): The device will be used. torch.device("cuda") by default.
 
     """
-    device=get_current_device()
+    device = get_current_device()
     pipeline_size = gpc.get_world_size(ParallelMode.PIPELINE)
     pipeline_rank = gpc.get_local_rank(ParallelMode.PIPELINE)
 

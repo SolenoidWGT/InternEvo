@@ -15,6 +15,7 @@ from .utils import gather_forward_split_backward, split_forward_gather_backward
 
 rotary_emb = None
 
+
 class Embedding1D(nn.Module):
     """
     1D Embedding.
@@ -395,7 +396,7 @@ class RotaryEmbedding(torch.nn.Module):
         # self.inv_freq5 = self.inv_freq2 ** self.inv_freq3
         # self.inv_freq6 = self.inv_freq5 / self.inv_freq4
         # self.inv_freq7 = self.inv_freq1 / self.inv_freq6
-        # self.inv_freq =  self.inv_freq7                          
+        # self.inv_freq =  self.inv_freq7
         self.scale_base = scale_base
         self.scale = (
             (torch.arange(0, dim, 2, device=device, dtype=torch.float32) + 0.4 * dim) / (1.4 * dim)

@@ -189,27 +189,22 @@ class PipelineScheduler(BaseScheduler):
 
     def load_batch(self, engine, data_iter):
         # Pipeline schedule just puts data in memory,
-        batch_data, actual_batch_size = engine.load_batch(data_iter, to_gpu=False)
-
-        # Even if 'use_flash_attn' is False, the data seen when the 'load_batch' is called is still packed,
-        # because internlm's current train dataset is packed, even using dummy data.
-        # The unpack operation is performed in load_micro_batch().
-        if check_data_is_packed(batch_data):
-            micro_num = actual_batch_size
-        else:
-            micro_num = actual_batch_size // gpc.config.data["micro_bsz"]
-
+        batch_data, micro_num = engine.load_batch(data_iter, to_gpu=False)
         self.microbatch_offset = 0
-        self.batch_size = actual_batch_size
+        self.batch_size = micro_num
         self.batch_data, self.batch_label = batch_data
-        self.bsz_stride = self.batch_size // micro_num
+        self.bsz_stride = self.batch_size // micro_num  # should always be 1.
+        assert self.bsz_stride == 1, self.bsz_stride
         # 'num_microbatches' is no longer an initialization parameter,
         # but is determined on the fly by the Scheduler.
         self.num_microbatches = micro_num  # Rampup or variable bsz size.
 
     def load_micro_batch(self):
         micro_batch_data, micro_batch_label = self._load_micro_batch(
-            data=self.batch_data, label=self.batch_label, offset=self.microbatch_offset, bsz_stride=self.bsz_stride
+            data=self.batch_data,
+            label=self.batch_label,
+            offset=self.microbatch_offset,
+            bsz_stride=self.bsz_stride,
         )
         if self.data_process_func:
             micro_batch_data["input_ids"] = self.data_process_func(
@@ -221,7 +216,11 @@ class PipelineScheduler(BaseScheduler):
             micro_batch_data.pop("indexes")
 
         micro_batch_data["label"] = micro_batch_label
-        self.microbatch_offset += self.bsz_stride
+
+        if self.packed_mode:
+            self.microbatch_offset += self.bsz_stride
+        else:
+            self.microbatch_offset += 1
 
         return move_to_device(micro_batch_data)
 
@@ -810,7 +809,11 @@ class InterleavedPipelineScheduler(PipelineScheduler):
             bsz_stride=self.bsz_stride,
         )
         micro_batch_data["label"] = micro_batch_label
-        self.microbatch_offset[model_chunk_id] += self.bsz_stride
+        if self.packed_mode:
+            self.microbatch_offset[model_chunk_id] += self.bsz_stride
+        else:
+            self.microbatch_offset[model_chunk_id] += 1
+
         return move_to_device(micro_batch_data)
 
     def _forward_step(self, engine, chunk_id):

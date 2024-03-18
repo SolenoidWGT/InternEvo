@@ -5,6 +5,7 @@ import itertools as it
 import operator
 import os
 from copy import deepcopy
+from enum import Enum, unique
 from typing import Dict
 
 import numpy as np
@@ -17,17 +18,12 @@ from internlm.core.context import global_context as gpc
 from internlm.data.single_dataset import JsonlDataset
 from internlm.data.utils import get_dataset_type_id, get_dataset_type_ids_map
 from internlm.utils.logger import get_logger
-from enum import Enum, unique
 
 DEFAULT_SEED = 1024
 logger = get_logger(__file__)
 
 
-def get_ltor_masks_and_position_ids(data,
-                                    eod_token,
-                                    reset_position_ids,
-                                    reset_attention_mask,
-                                    eod_mask_loss):
+def get_ltor_masks_and_position_ids(data, eod_token, reset_position_ids, reset_attention_mask, eod_mask_loss):
     """Build masks and position id for left to right model."""
 
     # Extract batch size and sequence length.
@@ -38,9 +34,9 @@ def get_ltor_masks_and_position_ids(data,
         att_mask_batch = micro_batch_size
     else:
         att_mask_batch = 1
-    attention_mask = torch.tril(torch.ones(
-        (att_mask_batch, seq_length, seq_length), device=data.device)).view(
-            att_mask_batch, 1, seq_length, seq_length)
+    attention_mask = torch.tril(torch.ones((att_mask_batch, seq_length, seq_length), device=data.device)).view(
+        att_mask_batch, 1, seq_length, seq_length
+    )
 
     # Loss mask.
     loss_mask = torch.ones(data.size(), dtype=torch.float, device=data.device)
@@ -48,8 +44,7 @@ def get_ltor_masks_and_position_ids(data,
         loss_mask[data == eod_token] = 0.0
 
     # Position ids.
-    position_ids = torch.arange(seq_length, dtype=torch.long,
-                                device=data.device)
+    position_ids = torch.arange(seq_length, dtype=torch.long, device=data.device)
     position_ids = position_ids.unsqueeze(0).expand_as(data)
     # We need to clone as the ids will be modifed based on batch index.
     if reset_position_ids:
@@ -71,16 +66,17 @@ def get_ltor_masks_and_position_ids(data,
                 i = eod_index[j]
                 # Mask attention loss.
                 if reset_attention_mask:
-                    attention_mask[b, 0, (i + 1):, :(i + 1)] = 0
+                    attention_mask[b, 0, (i + 1) :, : (i + 1)] = 0
                 # Reset positions.
                 if reset_position_ids:
-                    position_ids[b, (i + 1):] -= (i + 1 - prev_index)
+                    position_ids[b, (i + 1) :] -= i + 1 - prev_index
                     prev_index = i + 1
 
     # Convert attention mask to binary:
-    attention_mask = (attention_mask < 0.5)
+    attention_mask = attention_mask < 0.5
 
     return attention_mask, loss_mask, position_ids
+
 
 @unique
 class PackedDatasetType(Enum):
@@ -89,12 +85,14 @@ class PackedDatasetType(Enum):
     TorchAttnMask = 3
     MindSpore = 4
 
+
 packed_dataset_type = {
-    'TorchPack' : PackedDatasetType.TorchPack,
-    'TorchUnPacked' : PackedDatasetType.TorchUnPacked,
-    'TorchAttnMask' : PackedDatasetType.TorchAttnMask,
-    'MindSpore' : PackedDatasetType.MindSpore,
+    "TorchPack": PackedDatasetType.TorchPack,
+    "TorchUnPacked": PackedDatasetType.TorchUnPacked,
+    "TorchAttnMask": PackedDatasetType.TorchAttnMask,
+    "MindSpore": PackedDatasetType.MindSpore,
 }
+
 
 class NoPackedDataset(torch.utils.data.Dataset):
     """
@@ -132,9 +130,12 @@ class NoPackedDataset(torch.utils.data.Dataset):
         self.num_tokens = sum(self.lengths)
         assert self.pad_token == self.eos_token
 
-        print(f"self.packed_length: {self.packed_length}, \
-self.micro_bsz: {self.micro_bsz}, self.max_length_per_sample: \
-{self.max_length_per_sample}, self.pad_token: {self.pad_token}, self.eos_token: {self.eos_token}", flush=True)
+        if "DEBUG_DATA_SHAPE" in os.environ:
+            print(
+                f"packed_length: {self.packed_length}, micro_bsz: {self.micro_bsz}, max_length_per_sample: \
+{self.max_length_per_sample}, pad_token: {self.pad_token}, eos_token: {self.eos_token}",
+                flush=True,
+            )
 
     def get_dataset_name(self):
         return self.dataset.get_dataset_name()
@@ -177,7 +178,7 @@ self.micro_bsz: {self.micro_bsz}, self.max_length_per_sample: \
                 chunk = sample["tokens"][0:length]
                 token_length = len(chunk)
                 padding_length = self.max_length_per_sample - token_length
-                chunk = np.pad(chunk, (0, padding_length), 'constant', constant_values=(self.eos_token, self.eos_token))
+                chunk = np.pad(chunk, (0, padding_length), "constant", constant_values=(self.eos_token, self.eos_token))
 
                 label = np.array(list(chunk[1:]) + [self.eos_token])
                 label[np.array(chunk[:] == self.eos_token)] = -100
@@ -186,17 +187,16 @@ self.micro_bsz: {self.micro_bsz}, self.max_length_per_sample: \
                 make_batch_fn(pack, chunk)
                 make_batch_fn(type_ids, [sample.get("type_id", 0)] * self.max_length_per_sample)
                 cu_seqlens.extend([cu_seqlens[-1] + token_length])
-                indexes.extend(list(range(token_length)) + [-1] * padding_length) 
+                indexes.extend(list(range(token_length)) + [-1] * padding_length)
             else:
                 # If the dataset length is not enough to fetch next sample, just drop last.
                 make_batch_fn(labels, [-100] * self.max_length_per_sample)
                 make_batch_fn(chunk, [self.eos_token] * self.max_length_per_sample)
                 make_batch_fn(type_ids, [0] * self.max_length_per_sample)
                 cu_seqlens.extend([cu_seqlens[-1] + self.max_length_per_sample])
-                indexes.extend([-1] * self.max_length_per_sample) 
+                indexes.extend([-1] * self.max_length_per_sample)
 
         return {"tokens": pack, "cu_seqlens": cu_seqlens, "indexes": indexes, "labels": labels, "type_ids": type_ids}
-
 
     def __getitem__(self, item: int) -> Dict:
         """Given the index, it returns a dict as
@@ -208,6 +208,7 @@ self.micro_bsz: {self.micro_bsz}, self.max_length_per_sample: \
         }
         """
         return self.build_unpack(item)
+
 
 class PackedDataset(torch.utils.data.Dataset):
     """
@@ -486,7 +487,9 @@ class PackedDatasetWithoutCuSeqlen(torch.utils.data.Dataset):
             if gpc.config.model.use_flash_attn_npu:
                 return {
                     "tokens": [pack_tokens],
-                    "cu_seqlens": [i * self.max_length_per_sample for i in range(self.bsz + 1)],# cu_seqlens不带micro_bsz这一维度
+                    "cu_seqlens": [
+                        i * self.max_length_per_sample for i in range(self.bsz + 1)
+                    ],  # cu_seqlens不带micro_bsz这一维度
                     # "indexes": list(range(self.max_length_per_sample)) * self.bsz,
                     "labels": [pack_labels],
                     "type_ids": [type_ids],
@@ -532,7 +535,9 @@ class PackedDatasetWithoutCuSeqlen(torch.utils.data.Dataset):
         if gpc.config.model.use_flash_attn_npu:
             return {
                 "tokens": [pack_tokens],
-                "cu_seqlens": [i * self.max_length_per_sample for i in range(self.bsz + 1)],# cu_seqlens不带micro_bsz这一维度
+                "cu_seqlens": [
+                    i * self.max_length_per_sample for i in range(self.bsz + 1)
+                ],  # cu_seqlens不带micro_bsz这一维度
                 # "indexes": list(range(self.max_length_per_sample)) * self.bsz,
                 "labels": [pack_labels],
                 "type_ids": [type_ids],
@@ -625,10 +630,13 @@ def get_packed_dataset_without_short_length(
                     ds = PackedDatasetWithoutCuSeqlen(ds, max_length_per_sample, packed_length)
                 else:
                     if gpc.config.model.use_flash_attn_npu:
-                        ds = NoPackedDataset(ds, 
-                                             max_length_per_sample=max_length_per_sample, 
-                                             packed_length=packed_length, 
-                                             pack_type=pack_type)
+                        logger.warning("use NoPackedDataset!")
+                        ds = NoPackedDataset(
+                            ds,
+                            max_length_per_sample=max_length_per_sample,
+                            packed_length=packed_length,
+                            pack_type=pack_type,
+                        )
                     else:
                         ds = PackedDataset(ds, max_length_per_sample, packed_length)
 
@@ -654,12 +662,14 @@ def test_npu_fa_packed_sample_into_one_batch(batch):
     """
     if gpc.config.model.use_flash_attn_npu is True:
         token_batch = batch[0]
-        assert gpc.config.data.micro_num == len(token_batch['input_ids']), f"{gpc.config.data.micro_num} = {len(token_batch['input_ids'])}"
+        assert gpc.config.data.micro_num == len(
+            token_batch["input_ids"]
+        ), f"{gpc.config.data.micro_num} = {len(token_batch['input_ids'])}"
         from internlm.data.collaters import get_ltor_masks_and_position_ids
 
         attention_mask_list = []
-        for micro_num_idx in range(len(token_batch['input_ids'])):
-            this_micro_batch = token_batch['input_ids'][micro_num_idx]
+        for micro_num_idx in range(len(token_batch["input_ids"])):
+            this_micro_batch = token_batch["input_ids"][micro_num_idx]
 
             assert len(this_micro_batch.size()) == 1
             assert gpc.config.data.micro_bsz == 1
@@ -669,17 +679,17 @@ def test_npu_fa_packed_sample_into_one_batch(batch):
                 eod_token=0,
                 reset_position_ids=True,
                 reset_attention_mask=True,
-                eod_mask_loss=True
+                eod_mask_loss=True,
             )
             attention_mask_list.append(attention_mask)
 
-        token_batch['input_ids'] = torch.unsqueeze(token_batch['input_ids'], 1) # -> [micro_num, micro_bsz, seqlen]
-        token_batch['attention_mask'] = attention_mask_list
-        token_batch.pop('indexes')
-        
-#         print(f"DP: {gpc.get_local_rank(ParallelMode.DATA)}, input_ids.shape: {token_batch['input_ids'].shape},\
-# cu_seqlens.shape: {token_batch['cu_seqlens'].shape}, \
-# # type_ids.shape: {token_batch['type_ids'].shape}, labels: {batch[1].shape}", flush=True)
+        token_batch["input_ids"] = torch.unsqueeze(token_batch["input_ids"], 1)  # -> [micro_num, micro_bsz, seqlen]
+        token_batch["attention_mask"] = attention_mask_list
+        token_batch.pop("indexes")
+
+        #         print(f"DP: {gpc.get_local_rank(ParallelMode.DATA)}, input_ids.shape: {token_batch['input_ids'].shape},\
+        # cu_seqlens.shape: {token_batch['cu_seqlens'].shape}, \
+        # # type_ids.shape: {token_batch['type_ids'].shape}, labels: {batch[1].shape}", flush=True)
 
         batch = (token_batch, batch[1])
 

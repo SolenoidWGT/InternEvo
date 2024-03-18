@@ -119,6 +119,9 @@ def initialize_trainer(
             gradient_accumulation_size=gpc.config.data.gradient_accumulation,
             scheduler_hooks=scheduler_hooks,
         )
+    
+    # set packed mode
+    scheduler.packed_mode = True if gpc.config.model.use_flash_attn else False
 
     # initialize engine for trainer
     engine = Engine(

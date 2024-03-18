@@ -157,12 +157,15 @@ class MHA(nn.Module):
             inner_cross_attn_cls = FlashCrossAttention
         elif use_flash_attn_npu:
             from internlm.model.multi_head_attention import FlashSelfAttentionNPU
+
             inner_attn_cls = FlashSelfAttentionNPU
             inner_cross_attn_cls = CrossAttention
         else:
             inner_attn_cls = SelfAttention
             inner_cross_attn_cls = CrossAttention
 
+        self.use_flash_attn_npu = use_flash_attn_npu
+        self.use_flash_attn = use_flash_attn
         self.inner_attn = inner_attn_cls(causal=causal, softmax_scale=softmax_scale, attention_dropout=dropout)
         self.inner_cross_attn = inner_cross_attn_cls(
             causal=causal, softmax_scale=softmax_scale, attention_dropout=dropout
@@ -229,9 +232,7 @@ class MHA(nn.Module):
                     context = self.inner_cross_attn(q, kv).to(self.dtype)
             else:
                 if self.use_flash_attn_npu:
-                    attention_mask = kwargs['attention_mask']
-                    assert len(attention_mask) == 1
-                    context = self.inner_attn(q, k, v, attention_mask[0])
+                    context = self.inner_attn(q, k, v, kwargs["attention_mask"])
                 else:
                     context = self.inner_cross_attn(q, kv)
         else:
@@ -673,17 +674,41 @@ class PackedFlashLlamaLayer1D(nn.Module):
                         )
 
     def forward(
-        self, hidden_states, residual=None, cu_seqlens=None, indexes=None, inference_params=None, max_seqlen=None, attention_mask=None
+        self,
+        hidden_states,
+        residual=None,
+        cu_seqlens=None,
+        indexes=None,
+        inference_params=None,
+        max_seqlen=None,
+        attention_mask=None,
     ):
         if self.checkpoint and self.training:
             return activation_checkpoint(
-                self._forward, False, hidden_states, residual, cu_seqlens, indexes, inference_params, max_seqlen, attention_mask
+                self._forward,
+                False,
+                hidden_states,
+                residual,
+                cu_seqlens,
+                indexes,
+                inference_params,
+                max_seqlen,
+                attention_mask,
             )
         else:
-            return self._forward(hidden_states, residual, cu_seqlens, indexes, inference_params, max_seqlen, attention_mask)
+            return self._forward(
+                hidden_states, residual, cu_seqlens, indexes, inference_params, max_seqlen, attention_mask
+            )
 
     def _forward(
-        self, hidden_states=None, residual=None, cu_seqlens=None, indexes=None, inference_params=None, max_seqlen=None, attention_mask= None
+        self,
+        hidden_states=None,
+        residual=None,
+        cu_seqlens=None,
+        indexes=None,
+        inference_params=None,
+        max_seqlen=None,
+        attention_mask=None,
     ):
         r"""Pass the input through the encoder layer.
 
@@ -715,8 +740,8 @@ class PackedFlashLlamaLayer1D(nn.Module):
                 "indexes": indexes,
                 "inference_params": inference_params,
             }
-            if attention_mask:
-                mixer_kwargs.update({'attention_mask': attention_mask})
+            if attention_mask is not None:
+                mixer_kwargs.update({"attention_mask": attention_mask})
             hidden_states = self.attention(hidden_states, **mixer_kwargs)
 
             if not isinstance(self.feed_forward, nn.Identity):
@@ -750,7 +775,7 @@ class PackedFlashLlamaLayer1D(nn.Module):
                 "inference_params": inference_params,
             }
             if attention_mask:
-                mixer_kwargs.update({'attention_mask': attention_mask})
+                mixer_kwargs.update({"attention_mask": attention_mask})
             mixer_out = self.attention(hidden_states, **mixer_kwargs)
             if self.return_residual:  # mixer out is actually a pair here
                 mixer_out, hidden_states = mixer_out
@@ -979,7 +1004,23 @@ class PackedFlashLlama1D(nn.Module):
         self.parallel_output = parallel_output
         self.attention_mask = None
 
-    def forward(self, hidden_states=None, cu_seqlens=None, input_ids=None, indexes=None, inference_params=None, attention_mask=None):
+    def forward(
+        self,
+        hidden_states=None,
+        cu_seqlens=None,
+        input_ids=None,
+        indexes=None,
+        inference_params=None,
+        attention_mask=None,
+        max_seqlen=None,
+    ):
+        # attention_mask: compute attention on the places where the value is 1
+        if cu_seqlens is not None:
+            cu_seqlens = cu_seqlens[0].to(hidden_states.device)
+            max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item()
+            if gpc.config.parallel.sequence_parallel and self.tp_mode == "isp":
+                indexes = split_forward_gather_backward(indexes, ParallelMode.TENSOR, dim=0)
+
         # attention_mask: compute attention on the places where the value is 1
         if attention_mask is not None:
             self.attention_mask = attention_mask
@@ -990,24 +1031,6 @@ class PackedFlashLlama1D(nn.Module):
                 hidden_states = (
                     self.embed_grad_scale * hidden_states + (1 - self.embed_grad_scale) * hidden_states.detach()
                 )
-        if isinstance(cu_seqlens, list):
-            assert len(cu_seqlens) == 1
-            cu_seqlens = cu_seqlens[0].to(hidden_states.device)
-
-        if cu_seqlens is not None:
-            cu_seqlens = cu_seqlens.squeeze(0)
-            hidden_states = hidden_states.squeeze(0)  # If cu_seqlens is passed in，it indicated a packed state，
-            # the batch dimension with a size of 1 should be directly squeezed off.
-
-        if indexes is not None:
-            assert len(indexes) == 1
-            # The indexes are used to indicate the actual position IDs of each token in the packed input.
-            indexes = indexes[0]
-            # if the sequence parallel mode is 'isp', the indexes should also be split in sequence dimension.
-            if gpc.config.parallel.sequence_parallel and self.tp_mode == "isp":
-                indexes = split_forward_gather_backward(indexes, ParallelMode.TENSOR, dim=0)
-
-        max_seqlen = (cu_seqlens[1:] - cu_seqlens[:-1]).max().item() if cu_seqlens is not None else None
 
         for _, block in enumerate(self.layers):
             hidden_states = block(
@@ -1057,7 +1080,7 @@ def _build_generic_model_1d(num_layers, num_chunks, **kwargs):
         device (Optional[Union[str, torch.device]]): The device will be used. torch.device("cuda") by default.
 
     """
-    device=get_current_device()
+    device = get_current_device()
     pipeline_size = gpc.get_world_size(ParallelMode.PIPELINE)
     pipeline_rank = gpc.get_local_rank(ParallelMode.PIPELINE)
 
@@ -1209,4 +1232,3 @@ def build_model_with_cfg(
     )
 
     return _build_generic_model_1d(num_layers=num_layers, num_chunks=num_chunks, **cfg)
-                                                                                                  

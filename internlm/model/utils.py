@@ -6,6 +6,7 @@ from typing import Callable, Optional
 import torch
 import torch.nn.functional as F
 from torch import Tensor
+
 # from torch.cuda.amp import custom_bwd, custom_fwd
 from torch.distributed import ProcessGroup
 
@@ -657,7 +658,7 @@ def try_import_RMSNorm():
 
         return RMSNorm
     except ImportError:
-    # except ModuleNotFoundError:
+        # except ModuleNotFoundError:
         logger.warning("The torch implementation for MixFusedRMSNorm is slower than apex. Please note this!")
         from internlm.model.norm import RMSNormTorch as RMSNorm
 
