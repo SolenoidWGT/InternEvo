@@ -598,7 +598,7 @@ class PackedFlashLlamaLayer1D(nn.Module):
                 device=device,
                 dtype=dtype,
                 mlp_layer_fusion=mlp_layer_fusion,
-                sequence_parallel=gpc.config.parallel.sequence_parallel,
+                sequence_parallel=sequence_parallel,
                 multiple_of=multiple_of,
             )
         else:

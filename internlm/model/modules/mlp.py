@@ -59,7 +59,7 @@ class BaseFeedForward(nn.Module):
             "sequence_parallel": sequence_parallel,
             "device": device,
             "dtype": dtype,
-            "multiple_of": multiple_of,
+            "multiple_of": 1,  # TODO: check Column/RowParallelLinearTorch.
         }
         if not self.mlp_layer_fusion:
             # gate_proj
