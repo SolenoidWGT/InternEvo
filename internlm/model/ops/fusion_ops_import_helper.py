@@ -22,9 +22,7 @@ def try_import_RMSNorm():
     try:
         device_backend = internlm_accelerator.get_accelerator_backend()
         if device_backend == AcceleratorType.DIPU:
-            from deeplink_ext.internlm_ops.rms_norm import (
-                DeepLinkRMSNormWithNormalizedShape as RMSNorm,
-            )
+            from deeplink_ext.internevo_ops import MixedFusedRMSNorm as RMSNorm
 
             if gpc.is_rank_for_log():
                 logger.warning("Use DeepLinkRMSNormWithNormalizedShape, Please note this!")
@@ -63,9 +61,11 @@ def try_import_fused_rotary() -> Tuple[Union[None, Callable], Union[None, Callab
 
             return None, None, rotary_emb.apply_rotary
         elif device_backend is AcceleratorType.DIPU:
-            from deeplink_ext.internlm_ops.rotary.deeplink import (
-                DeeplinkApplyRotaryEmb,
-                DeeplinkApplyRotaryEmbQKV_,
+            from deeplink_ext.internevo_ops import (
+                ApplyRotaryEmb as DeeplinkApplyRotaryEmb,
+            )
+            from deeplink_ext.internevo_ops import (
+                ApplyRotaryEmbQKV_ as DeeplinkApplyRotaryEmbQKV_,
             )
 
             if gpc.is_rank_for_log():
