@@ -127,8 +127,7 @@ def build_environment(rank, world_size, free_port, config):
     os.environ["MASTER_ADDR"] = "localhost"
     os.environ["MASTER_PORT"] = str(free_port)
     internlm_accelerator.empty_cache()
-    # launcher="torch"
-    internlm.launch_from_torch(config=config, seed=1024, backend="hccl")
+    internlm.launch_from_torch(config=config, seed=1024)
     args_sanity_check()
 
 

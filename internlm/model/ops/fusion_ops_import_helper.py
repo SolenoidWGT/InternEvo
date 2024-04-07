@@ -137,8 +137,10 @@ def internlm_init_CrossEntropyLoss(
             "parallel_output must be set false. Please note this!"
         )
 
-    kwargs.pop("process_group")
-    kwargs.pop("inplace_backward")
+    if "process_group" in kwargs:
+        kwargs.pop("process_group")
+    if "inplace_backward" in kwargs:
+        kwargs.pop("inplace_backward")
 
     return nn.CrossEntropyLoss(reduction=reduction, label_smoothing=label_smoothing, **kwargs)
 
