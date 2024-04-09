@@ -164,13 +164,14 @@ def try_import_FusedAdamW():
                 )
             return adam_extra_kwargs, torch.optim.AdamW
         elif backend is AcceleratorType.NPU:
+            from internlm.solver.optimizer.npu_fused_adamw import AdamW as NPUFusedAdamW
 
             if gpc.is_rank_for_log():
                 logger.warning(
                     "Use normal AdamaW, NPU fused_adamw currently has"
                     "accuracy issues and is not supported yet. Please note this!"
                 )
-            # return adam_extra_kwargs, torch_npu.optim.NpuFusedAdamW
+            return adam_extra_kwargs, NPUFusedAdamW
     except (ModuleNotFoundError, ImportError):
         pass
 
