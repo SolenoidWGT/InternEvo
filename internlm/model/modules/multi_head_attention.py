@@ -47,11 +47,11 @@ def get_gqa_attn_cls(use_flash_attn, tp_mode, causal, softmax_scale, dropout, se
             inner_attn = inner_attn_cls(causal=causal, softmax_scale=softmax_scale, attention_dropout=dropout)
         elif device_backend == AcceleratorType.DIPU:
             from deeplink_ext.internevo_ops import (
-                DeepLinkCrossAttention,
-                DeepLinkSelfAttention,
+                FlashCrossAttention,
+                FlashSelfAttention,
             )
 
-            inner_attn_cls, inner_cross_attn_cls = DeepLinkSelfAttention, DeepLinkCrossAttention
+            inner_attn_cls, inner_cross_attn_cls = FlashSelfAttention, FlashCrossAttention
             inner_attn = inner_attn_cls(causal=causal, softmax_scale=softmax_scale, attention_dropout=dropout)
         else:
             raise NotImplementedError(f"Unsupport device type: {device_backend} for flash attention")
@@ -566,11 +566,9 @@ class MHA(nn.Module):
                 FlashCrossAttention, FlashSelfAttention = AscendFlashSelfAttention, AscendFlashSelfAttention
             elif internlm_accelerator.get_accelerator_backend() == AcceleratorType.DIPU:
                 from deeplink_ext.internevo_ops import (
-                    DeepLinkCrossAttention,
-                    DeepLinkSelfAttention,
+                    FlashCrossAttention,
+                    FlashSelfAttention,
                 )
-
-                FlashCrossAttention, FlashSelfAttention = DeepLinkCrossAttention, DeepLinkSelfAttention
 
             inner_attn_cls = FlashSelfAttention
             inner_cross_attn_cls = FlashCrossAttention

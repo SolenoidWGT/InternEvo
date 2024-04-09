@@ -25,7 +25,7 @@ def try_import_RMSNorm():
             from deeplink_ext.internevo_ops import MixedFusedRMSNorm as RMSNorm
 
             if gpc.is_rank_for_log():
-                logger.warning("Use DeepLinkRMSNormWithNormalizedShape, Please note this!")
+                logger.warning("Use Deeplink MixedFusedRMSNorm, Please note this!")
 
             return RMSNorm
         else:
@@ -69,7 +69,7 @@ def try_import_fused_rotary() -> Tuple[Union[None, Callable], Union[None, Callab
             )
 
             if gpc.is_rank_for_log():
-                logger.warning("Use DeeplinkApplyRotaryEmb, Please note this!")
+                logger.warning("Use Deeplink ApplyRotaryEmb, Please note this!")
 
             return DeeplinkApplyRotaryEmb.apply, DeeplinkApplyRotaryEmbQKV_.apply, None
 
