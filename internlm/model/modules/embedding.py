@@ -249,6 +249,69 @@ class ApplyRotaryEmbQKV_(torch.autograd.Function):
         return dqkv, None, None, None, None, None
 
 
+def apply_torch_npu_rotary_mul(x: Tensor, cos: Tensor, sin: Tensor, out_dtype: torch.dtype):
+    """Torch implementation of 'npu_rotary_mul', baseline for unit testing.
+
+    Args:
+        x (Tensor): q or k, shape is [B, S, N, D].
+        cos (Tensor): cos, shape is [1, S, 1, D].
+        sin (Tensor): sin, shape is [1, S, 1, D].
+        out_dtype (torch.dtype): output dtype.
+    """
+    # NOTE: This could probably be moved to Triton.
+    def rotate_half(_x):
+        x1, x2 = _x.chunk(2, dim=-1)
+        return torch.cat((-x2, x1), dim=-1)
+
+    # Handle a possible sequence length mismatch in between q and k.
+    cos = cos[:, : x.shape[1], :, :]
+    sin = sin[:, : x.shape[1], :, :]
+    re = (x * cos) + (rotate_half(x) * sin)
+
+    del rotate_half
+    return re.to(out_dtype)
+
+
+def rotary_emb_in_rotate_half_style(x: Tensor, cos: Tensor, sin: Tensor, cos_k=None, sin_k=None, use_fp32=True):
+    """The rotary_emb implemented in the rotate_half style is different from the flash_attn's rotary_emb
+    in that cos and sin require [max_position_embeddings, dim/2] -> [1, max_position_embeddings, 1, dim].
+
+    Args:
+        x (Tensor): x, If x is qkv, shape is [B, S, 3, N, D]; If x is q or k, shape is [B, S, N, D].
+        cos (Tensor): cos, shape is [S, D//2].
+        sin (Tensor): sin, shape is [S, D//2].
+    """
+    assert cos_k is None and sin_k is None, "Fused torch_npu rope not support XPos by now"
+
+    # reformat cos/sin shape.
+    cos = torch.cat((cos, cos), dim=-1)[None, :, None, :]
+    sin = torch.cat((sin, sin), dim=-1)[None, :, None, :]
+    old_dtype = x.dtype
+
+    if use_fp32:
+        cos = cos.float()
+        sin = sin.float()
+
+    if len(x.shape) == 5:
+        q, k, _ = x.unbind(dim=2)
+
+        if use_fp32:
+            q = q.float()
+            k = k.float()
+
+        q = apply_rotary_func(q, cos=cos, sin=sin, out_dtype=old_dtype)
+        k = apply_rotary_func(k, cos=cos, sin=sin, out_dtype=old_dtype)
+
+        if use_fp32:
+            x[:, :, 0, ...].copy_(q)
+            x[:, :, 1, ...].copy_(k)
+    else:
+        if use_fp32:
+            x = x.float()
+        x = apply_rotary_func(x, cos=cos, sin=sin, out_dtype=old_dtype)
+    return x
+
+
 apply_rotary_emb, apply_rotary_emb_qkv_, apply_rotary_func = try_import_fused_rotary()
 if apply_rotary_emb is None:
     apply_rotary_emb = ApplyRotaryEmb.apply

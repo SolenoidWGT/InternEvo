@@ -1,7 +1,7 @@
 from typing import Callable, Tuple, Union
 
 import torch
-from torch import nn
+from torch import Tensor, nn
 
 from internlm.accelerator import AcceleratorType, get_accelerator
 from internlm.core.context import ParallelMode
@@ -11,6 +11,8 @@ from internlm.utils.logger import get_logger
 logger = get_logger(__file__)
 
 internlm_accelerator = get_accelerator()
+
+fused_rotary_is_warning = False
 
 
 # RMSNorm
@@ -53,13 +55,15 @@ def try_import_fused_rotary() -> Tuple[Union[None, Callable], Union[None, Callab
         Tuple[Union[None, Callable], Union[None, Callable], Union[None, Callable]]:
             Returns if there is a mixing operator available, otherwise returns None.
     """
+    global fused_rotary_is_warning
     try:
         device_backend = internlm_accelerator.get_accelerator_backend()
         if device_backend is AcceleratorType.GPU:
             import rotary_emb
 
-            if gpc.is_rank_for_log():
+            if gpc.is_rank_for_log() and not fused_rotary_is_warning:
                 logger.warning("Use flash_attn rotary_emb, Please note this!")
+                fused_rotary_is_warning = True
 
             return None, None, rotary_emb.apply_rotary
         elif device_backend is AcceleratorType.DIPU:
@@ -68,18 +72,44 @@ def try_import_fused_rotary() -> Tuple[Union[None, Callable], Union[None, Callab
                 DeeplinkApplyRotaryEmbQKV_,
             )
 
-            if gpc.is_rank_for_log():
+            if gpc.is_rank_for_log() and not fused_rotary_is_warning:
                 logger.warning("Use DeeplinkApplyRotaryEmb, Please note this!")
+                fused_rotary_is_warning = True
 
             return DeeplinkApplyRotaryEmb.apply, DeeplinkApplyRotaryEmbQKV_.apply, None
+        elif device_backend is AcceleratorType.NPU:
+            import torch_npu
+
+            from internlm.model.modules.embedding import rotary_emb_in_rotate_half_style
+
+            def apply_npu_rotary_mul(x: Tensor, cos: Tensor, sin: Tensor, out_dtype: torch.dtype):
+                """
+                Implement RotaryEmbedding rotation position encoding. Support FakeTensor mode.
+                Ref: https://www.hiascend.com/document/detail/zh/CANNCommunityEdition/80RC1alpha002/
+                        apiref/fmkadptapi/ptaoplist_000451.html
+                Args:
+                    x (Tensor): q or k, shape is [B, S, N, D].
+                    cos (Tensor): cos, shape is [1, S, 1, D].
+                    sin (Tensor): sin, shape is [1, S, 1, D].
+                    out_dtype (torch.dtype): output dtype.
+                """
+                return torch_npu.npu_rotary_mul(x, cos, sin).to(out_dtype)
+
+            if gpc.is_rank_for_log() and not fused_rotary_is_warning:
+                logger.warning("Use npu_rotary_mul, Please note this!")
+                fused_rotary_is_warning = True
+
+            return rotary_emb_in_rotate_half_style, rotary_emb_in_rotate_half_style, apply_npu_rotary_mul
 
     except (ModuleNotFoundError, ImportError):
         pass
 
-    if gpc.is_rank_for_log():
+    if gpc.is_rank_for_log() and not fused_rotary_is_warning:
         logger.warning(
             "The torch implementation for apply_rotary is slower" "than flash atten rotary_emb. Please note this!"
         )
+        fused_rotary_is_warning = True
+
     return None, None, None
 
 
