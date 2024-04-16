@@ -487,6 +487,11 @@ now step_count is {train_state.step_count}",
         max_step_1 = found_latest_snapshot(ckpt_list_1)
 
         if sum([max_step_0, max_step_1, max_normal_step]) == 0:
+            logger.warning(
+                f"Can't found resumable checkpoint step > 0, \
+Please check save_ckpt_folder: '{self.save_ckpt_folder}'. If you want to load checkpoint at step 0, \
+please use 'load_ckpt_info' rather than 'auto_resume=True'!"
+            )
             return None, None
         else:
             snap_load_path = snapshot_path_0 if max_step_0 > max_step_1 else snapshot_path_1
@@ -551,9 +556,7 @@ now step_count is {train_state.step_count}",
             load_content_str = load_func(self, self.load_ckpt_info, train_state)
 
             # If we only load model weight, we need rewrite zero optim's fp32 buffer.
-            if (
-                load_content.only_load(CheckpointLoadContent.MODEL) and isinstance(self.optimizer, HybridZeroOptimizer)
-            ) or gpc.config.get("only_load_lr", False):
+            if not load_content.need_load(CheckpointLoadContent.OPIMIZER):
                 reload_zero_fp32_buff(self.optimizer)
 
             if gpc.is_rank_for_log():

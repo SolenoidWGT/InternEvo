@@ -112,7 +112,10 @@ def internlm_init_CrossEntropyLoss(
                     **kwargs,
                 )
         except (ModuleNotFoundError, ImportError):
-            pass
+            raise RuntimeError(
+                "Only FlashCrossEntropyLoss support parallel_output=True, \
+            but can't load FlashCrossEntropyLoss from you env."
+            )
 
     if gpc.is_rank_for_log():
         logger.warning(
