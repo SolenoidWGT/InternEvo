@@ -101,6 +101,7 @@ class AscendFlashAttention(torch.nn.Module):
 
     def forward(
         self,
+        *args,
         qkv=None,
         q=None,
         k=None,
@@ -121,17 +122,18 @@ class AscendFlashAttention(torch.nn.Module):
         return_attn_probs=False,  # pylint: disable=W0613
         attention_mask=None,
     ):
+        assert len(args) == 0, "Please use keyword arguments for AscendFlashAttention"
         if qkv is not None:
             assert (q, k, v, kv) == (None, None, None, None)
-            q = qkv[:, :, 0]
-            k = qkv[:, :, 1]
-            v = qkv[:, :, 2]
+            q = qkv[..., 0, :, :]
+            k = qkv[..., 1, :, :]
+            v = qkv[..., 2, :, :]
         else:
             assert q is not None
             if kv is not None:
                 assert (k, v) == (None, None)
-                k = kv[:, :, 0]
-                v = kv[:, :, 1]
+                k = kv[..., 0, :, :]
+                v = kv[..., 1, :, :]
             else:
                 assert k is not None and v is not None
 
@@ -195,19 +197,9 @@ class AscendFlashAttention(torch.nn.Module):
             k = k.squeeze(dim=2)
             v = v.squeeze(dim=2)
 
-        B, S, N, _ = q.shape[0], q.shape[1], q.shape[2], q.shape[3]
-
-        if self.shape_order == "BSH":
-            q, k, v = [rearrange(x, "b s h d -> b s (h d)") for x in [q, k, v]]
-        elif self.shape_order == "SBH":
-            q, k, v = [rearrange(x, "b s h d -> s b (h d)") for x in [q, k, v]]
-        elif self.shape_order == "TND":
-            assert B == 1
-            q, k, v = [rearrange(x, "b s h d -> (b s) h d") for x in [q, k, v]]
-
-        assert not (actual_seq_qlen is None) ^ (actual_seq_kvlen is None)
-
         if self.use_varlen_fa:
+            B, S, N, _ = 1, q.shape[0], q.shape[1], q.shape[2]
+            assert B == 1
             if attention_mask is None:
                 attention_mask = torch.triu(
                     torch.ones(max_seqlen_q, max_seqlen_k, device=get_current_device()), 1
@@ -215,9 +207,16 @@ class AscendFlashAttention(torch.nn.Module):
             actual_seq_qlen = actual_seq_qlen[1:].tolist()
             actual_seq_kvlen = actual_seq_kvlen[1:].tolist()
         else:
+            _, S, N, _ = q.shape[0], q.shape[1], q.shape[2], q.shape[3]
             if attention_mask is None:
                 attention_mask = torch.triu(torch.ones(S, S, device=get_current_device()), 1).bool()
 
+        if self.shape_order == "BSH":
+            q, k, v = [rearrange(x, "b s h d -> b s (h d)") for x in [q, k, v]]
+        elif self.shape_order == "SBH":
+            q, k, v = [rearrange(x, "b s h d -> s b (h d)") for x in [q, k, v]]
+
+        assert not (actual_seq_qlen is None) ^ (actual_seq_kvlen is None)
         output = torch_npu.npu_fusion_attention(
             query=q,
             key=k,
@@ -240,8 +239,6 @@ class AscendFlashAttention(torch.nn.Module):
             output = rearrange(output, "b s (h d) -> b s h d", h=N)
         elif self.shape_order == "SBH":
             output = rearrange(output, "s b (h d) -> b s h d", h=N)
-        elif self.shape_order == "TND":
-            output = rearrange(output, "(one s) h d -> one s (h d)", one=1)
 
         return output
 
@@ -879,8 +876,7 @@ class MHA(nn.Module):
         kwargs.pop("indexes")
 
         # for packed data, batch dimension with a size of 1 should be directly squeezed off.
-        if internlm_accelerator.get_accelerator_backend() in [AcceleratorType.GPU, AcceleratorType.DIPU]:
-            qkv = qkv.squeeze(0)
+        qkv = qkv.squeeze(0)
 
         if inference_params is None:
             if gpc.config.model.dtype is torch.float32 and gpc.config.model.use_flash_attn:
@@ -894,9 +890,8 @@ class MHA(nn.Module):
         else:
             raise RuntimeError("Not support this right now")
 
-        if internlm_accelerator.get_accelerator_backend() in [AcceleratorType.GPU, AcceleratorType.DIPU]:
-            context = rearrange(context, "s h d -> s (h d)")  # recover the shape
-            context = context.unsqueeze(0)  # restore bsz dimension
+        context = rearrange(context, "s h d -> s (h d)")  # recover the shape
+        context = context.unsqueeze(0)  # restore bsz dimension
 
         out = self.out_proj(context)
 

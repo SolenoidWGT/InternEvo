@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from einops import rearrange
 from torch import nn
 
-from internlm.accelerator import AcceleratorType, get_accelerator
+from internlm.accelerator import get_accelerator
 from internlm.core.context import ParallelMode
 from internlm.core.context.parallel_context import global_context as gpc
 from internlm.core.naive_amp import set_output_attr_to_module
@@ -412,9 +412,7 @@ class MHA(nn.Module):
         if inference_params is None:
             kv = torch.concat([k.unsqueeze(2), v.unsqueeze(2)], dim=2)
             # for packed data, batch dimension with a size of 1 should be directly squeezed off.
-            if internlm_accelerator.get_accelerator_backend() in [AcceleratorType.GPU, AcceleratorType.DIPU]:
-                q = q.squeeze(0)
-                kv = kv.squeeze(0)
+            q, kv = q.squeeze(0), kv.squeeze(0)
 
             if self.dtype is torch.float32:
                 if q.dtype not in [torch.float16, torch.bfloat16]:
@@ -448,9 +446,8 @@ class MHA(nn.Module):
         else:
             raise RuntimeError("Not support this right now")
 
-        if internlm_accelerator.get_accelerator_backend() in [AcceleratorType.GPU, AcceleratorType.DIPU]:
-            context = rearrange(context, "s h d -> s (h d)")  # recover the shape
-            context = context.unsqueeze(0)  # restore bsz dimension
+        context = rearrange(context, "s h d -> s (h d)")  # recover the shape
+        context = context.unsqueeze(0)  # restore bsz dimension
         out = self.wo(context)
         return out
 
