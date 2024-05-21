@@ -16,11 +16,7 @@ from internlm.model.modules.multi_head_attention import (
     AscendFlashAttention,
     CrossAttention,
 )
-from internlm.model.ops.fusion_ops_import_helper import try_import_RMSNorm
-from internlm.model.utils import pack_output_after_attn, unpack_qkv_before_attn
 from internlm.utils.common import set_random_seed
-
-RMSNorm = try_import_RMSNorm()
 
 HEAD_NUM = 32
 HIDDEN_SZIE = 4096
