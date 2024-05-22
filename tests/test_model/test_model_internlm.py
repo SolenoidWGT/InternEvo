@@ -11,10 +11,21 @@ from internlm.accelerator import get_accelerator
 from internlm.core.context import ParallelMode
 from internlm.core.context.parallel_context import Config
 from internlm.core.context.parallel_context import global_context as gpc
-from internlm.model.modeling_internlm import PackedFlashBaseLayer1D
-from internlm.model.ops.linear import RewardModelLinear, ScaleColumnParallelLinear
-from internlm.model.utils import gather_forward_split_backward
+from internlm.core.parallel.comm.tensor import (
+    HeadTensorParallelCommunicator,
+    LinearRole,
+    TensorParallelCommunicator,
+)
+from internlm.core.parallel.comm.utils import gather_forward_split_backward
+from internlm.model.modeling_internlm import InternLM1Decoder
+from internlm.model.modules.linear import (
+    ColumnParallelLinear,
+    RowParallelLinear,
+    ScaleColumnParallelLinear,
+    new_linear,
+)
 from internlm.utils.common import get_current_device
+from tests.common_fixture import find_free_port
 
 internlm_accelerator = get_accelerator()
 
@@ -62,14 +73,14 @@ config = Config(
 )
 
 
-def build_environment(rank, world_size):
+def build_environment(rank, world_size, free_port):
     import os
 
     os.environ["RANK"] = str(rank)
     os.environ["LOCAL_RANK"] = str(rank)
     os.environ["WORLD_SIZE"] = str(world_size)
     os.environ["MASTER_ADDR"] = "127.0.0.1"
-    os.environ["MASTER_PORT"] = "12345"
+    os.environ["MASTER_PORT"] = free_port
     internlm_accelerator.empty_cache()
     # launcher="torch"
     internlm.launch_from_torch(config=config, seed=1024)
@@ -92,18 +103,26 @@ def seed_all(seed, cuda_deterministic=False):
 
 def check_block(args):
     # init
-    rank, world_size = args
-    build_environment(rank, world_size)
+    rank, world_size, free_port = args
+    build_environment(rank, world_size, free_port)
     device = get_current_device()
     rtol, atol = (1e-3, 5e-3)
 
     # fix seed
     seed_all(1024)
 
+    ColumnParallelLinear.register_cls_communicator(
+        TensorParallelCommunicator(process_group=gpc.get_group(ParallelMode.TENSOR), role=LinearRole.COLUMN)
+    )
+
+    RowParallelLinear.register_cls_communicator(
+        TensorParallelCommunicator(process_group=gpc.get_group(ParallelMode.TENSOR), role=LinearRole.ROW)
+    )
+
     # define block
     blocks = nn.ModuleList(
         [
-            PackedFlashBaseLayer1D(
+            InternLM1Decoder(
                 hidden_size=4,  # 768
                 num_attention_heads=2,  # 12
                 mlp_ratio=2,
@@ -132,10 +151,12 @@ def check_block(args):
     hidden_states = torch.tensor(
         [
             [
-                [-1.1620, 1.3113, 0.1507, 2.2698],
-                [-1.2610, 1.0990, 0.3787, -0.3478],
-                [1.4001, 1.1982, -0.6696, 0.3269],
-                [1.3304, 1.2262, 1.0735, -1.1169],
+                [
+                    [-1.1620, 1.3113, 0.1507, 2.2698],
+                    [-1.2610, 1.0990, 0.3787, -0.3478],
+                    [1.4001, 1.1982, -0.6696, 0.3269],
+                    [1.3304, 1.2262, 1.0735, -1.1169],
+                ]
             ]
         ]
     )
@@ -201,9 +222,9 @@ def check_block(args):
 
 def check_head(args):
     # init
-    rank, world_size, is_reward = args
+    rank, world_size, free_port, is_reward = args
+    build_environment(rank, world_size, free_port)
     device = get_current_device()
-    build_environment(rank, world_size)
     rtol, atol = (1e-3, 5e-3)
     hidden_size = 4
     vocab_size = 4
@@ -212,9 +233,12 @@ def check_head(args):
     # fix seed
     seed_all(1024)
 
+    _retain_out_sharded = gpc.config.model.get("parallel_output", True)
+    _head_comminucator = HeadTensorParallelCommunicator(ParallelMode.TENSOR, _retain_out_sharded)
+    ScaleColumnParallelLinear.register_cls_communicator(_head_comminucator)
+
     # load standard
     if is_reward:
-        head_cls = RewardModelLinear
         standard_result = torch.tensor([[3.5938], [1.0703], [3.6250], [3.6250]], dtype=torch.bfloat16).to(device)
         standard_grad = torch.tensor(
             [
@@ -226,7 +250,6 @@ def check_head(args):
             dtype=torch.bfloat16,
         ).to(device)
     else:
-        head_cls = ScaleColumnParallelLinear
         standard_result = torch.tensor(
             [
                 [3.5938, -2.2188, 2.0312, 3.5625],
@@ -247,13 +270,14 @@ def check_head(args):
         ).to(device)
 
     # define head
-    head = head_cls(
+    head = new_linear(
+        name="head",
         in_features=hidden_size,
         out_features=gpc.get_world_size(ParallelMode.TENSOR) if is_reward else vocab_size,
-        process_group=gpc.get_group(ParallelMode.TENSOR),
         bias=False,
         device=device,
         dtype=torch.bfloat16,
+        is_reward=is_reward,
         weight_scale=embed_grad_scale,
     )
 
@@ -299,11 +323,11 @@ def check_head(args):
 
 def check_gather_forward(args):
     # init
-    rank, world_size, parallel_tensor = args
+    rank, world_size, free_port, parallel_tensor = args
     assert parallel_tensor in [1, 2]
     config.parallel.tensor = parallel_tensor
+    build_environment(rank, world_size, free_port)
     device = get_current_device()
-    build_environment(rank, world_size)
     rtol, atol = (1e-3, 5e-3)
 
     # fix seed
@@ -394,8 +418,9 @@ def check_gather_forward(args):
 @pytest.mark.block
 def test_block():
     ctx = mp.get_context("spawn")
+    free_port = str(find_free_port())
     with ctx.Pool(processes=8) as pool:
-        pool.map(check_block, [[rank, 8] for rank in range(8)])
+        pool.map(check_block, [[rank, 8, free_port] for rank in range(8)])
         pool.close()
         pool.join()
 
@@ -404,8 +429,9 @@ def test_block():
 @pytest.mark.parametrize("is_reward", [True, False])
 def test_head(is_reward):
     ctx = mp.get_context("spawn")
+    free_port = str(find_free_port())
     with ctx.Pool(processes=8) as pool:
-        pool.map(check_head, [[rank, 8, is_reward] for rank in range(8)])
+        pool.map(check_head, [[rank, 8, free_port, is_reward] for rank in range(8)])
         pool.close()
         pool.join()
 
@@ -414,8 +440,9 @@ def test_head(is_reward):
 @pytest.mark.parametrize("parallel_tensor", [1, 2])
 def test_gather_forward(parallel_tensor):
     ctx = mp.get_context("spawn")
+    free_port = str(find_free_port())
     with ctx.Pool(processes=8) as pool:
-        pool.map(check_gather_forward, [[rank, 8, parallel_tensor] for rank in range(8)])
+        pool.map(check_gather_forward, [[rank, 8, free_port, parallel_tensor] for rank in range(8)])
         pool.close()
         pool.join()
 

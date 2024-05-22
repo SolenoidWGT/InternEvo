@@ -3,18 +3,17 @@ import multiprocessing as mp
 import pytest
 import torch
 
-from internlm.model.ops.fusion_ops_import_helper import try_import_RMSNorm
+from internlm.model.modules.norm import new_layer_norm
 from internlm.utils.common import get_current_device
+from tests.common_fixture import find_free_port
 from tests.test_model.test_model_internlm import build_environment, seed_all
-
-RMSNorm = try_import_RMSNorm()
 
 
 def check_norm(args):
     # init
-    rank, world_size = args
+    rank, world_size, free_port = args
+    build_environment(rank, world_size, free_port)
     device = get_current_device()
-    build_environment(rank, world_size)
     rtol, atol = (1e-3, 5e-3)
     hidden_size = 4
     layer_norm_epsilon = 1e-05
@@ -23,7 +22,7 @@ def check_norm(args):
     seed_all(1024)
 
     # define norm
-    norm = RMSNorm(hidden_size, eps=layer_norm_epsilon)
+    norm = new_layer_norm(norm_type="rmsnorm", normalized_shape=hidden_size, eps=layer_norm_epsilon)
     norm = norm.to(device)
 
     # create input
@@ -83,8 +82,9 @@ def check_norm(args):
 @pytest.mark.norm
 def test_norm():
     ctx = mp.get_context("spawn")
+    free_port = str(find_free_port())
     with ctx.Pool(processes=8) as pool:
-        pool.map(check_norm, [[rank, 8] for rank in range(8)])
+        pool.map(check_norm, [[rank, 8, free_port] for rank in range(8)])
         pool.close()
         pool.join()
 
