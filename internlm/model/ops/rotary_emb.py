@@ -189,7 +189,7 @@ def _select_apply_rotary_func(
     use_fused_rope: bool = True,
 ) -> None:
     if use_fused_rope and flash_rotary_impl:
-        _rope_to_float32_wrapper((0, 1, 2, 3), _flash_apply_rotary_func, x1, x2, cos, sin, out1, out2, conj)
+        _flash_apply_rotary_func(x1, x2, cos, sin, out1, out2, conj)
     else:
         _rope_to_float32_wrapper((0, 1, 2, 3), _torch_apply_rotary_func, x1, x2, cos, sin, out1, out2, conj)
 
