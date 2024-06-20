@@ -12,6 +12,7 @@ from internlm.accelerator import AcceleratorType, get_accelerator
 from internlm.core.context import Config
 from internlm.core.context import global_context as gpc
 from internlm.core.context.process_group_initializer import ParallelMode
+from internlm.core.parallel.shard import cluster_load_balance
 from internlm.utils.common import get_master_node
 from internlm.utils.gputest import warmup_process_group
 from internlm.utils.logger import get_logger
@@ -643,6 +644,8 @@ def initialize_distributed_env(
         )
     else:
         assert launcher in ["slurm", "torch"], "launcher only support slurm or torch"
+
+    cluster_load_balance()
 
     if args_check:
         args_sanity_check()

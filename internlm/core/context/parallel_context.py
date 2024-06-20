@@ -7,6 +7,7 @@ import inspect
 import random
 import socket
 import sys
+from dataclasses import dataclass
 from importlib.machinery import SourceFileLoader
 from pathlib import Path
 from typing import Union
@@ -34,6 +35,18 @@ IS_TENSOR_EXPERT_DATA_PARALLEL = "is_tensor_expert_data_parallel"
 
 logger = get_logger(__file__)
 internlm_accelerator = get_accelerator()
+
+
+@dataclass
+class ClusterInfo:
+    # name: str
+    name: str
+    peak_tflops: float
+    capacity: float
+    intra_bw: float
+    inter_bw: float
+    gpu_per_node: int
+    node_num: int
 
 
 class Config(dict):
@@ -159,6 +172,10 @@ class ParallelContext(metaclass=SingletonMeta):
         self.virtual_pipeline_parallel_rank = None
         self._expert_parallel_group_names = []
         self.is_evaluating = False
+
+        self._group_map = {}
+        self.clusters = []
+        self.micro_num_list = None
 
     @property
     def config(self):
@@ -668,6 +685,18 @@ class ParallelContext(metaclass=SingletonMeta):
 
     def set_virtual_pipeline_parallel_rank(self, rank):
         self.virtual_pipeline_parallel_rank = rank
+
+    def get_cluster_local_rank(self):
+        devices_offset = 0
+        for i, cluster in enumerate(self.clusters):
+            devices_offset += (cluster.gpu_per_node * cluster.node_num)
+            print(f"devices_offset: {devices_offset}, cluster: {cluster}", flush=True)
+            if self.get_global_rank() <= devices_offset:
+                return i
+        raise ValueError
+
+    def get_model_parallel_size(self):
+        return self.get_world_size(ParallelMode.PIPELINE) * self.get_world_size(ParallelMode.TENSOR)
 
 
 global_context = ParallelContext()

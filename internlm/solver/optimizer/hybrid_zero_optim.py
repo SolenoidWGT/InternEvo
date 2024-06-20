@@ -6,6 +6,7 @@ from functools import partial
 from itertools import product
 from typing import List, Optional
 
+import numpy as np
 import torch
 import torch.distributed as dist
 from torch.optim import Optimizer
@@ -234,6 +235,7 @@ class HybridZeroOptimizer(BaseOptimizer):
         self.has_params = sum(self.param_group_has_params) != 0
         # flag used to skip unnecessary gradient reduce operation when gradient accumulation is enabled.
         self.skip_grad_reduce = False
+        self._unbalance_micro_num = gpc.micro_num_list is not None
 
         self._attach_reduction_hook()
 
@@ -342,6 +344,15 @@ class HybridZeroOptimizer(BaseOptimizer):
                         if self.skip_grad_reduce is False:
                             reduction_layernorm_func()
 
+                    def unbalance_micro_num_loss_scale_hook(grad):  # pylint: disable=W0613
+                        if self.skip_grad_reduce is True:  # 只在梯度累加的时候生效
+                            left_step = np.max(gpc.micro_num_list) - self.current_accum_step
+                            scale_denominator = np.sum(left_step >= gpc.micro_num_list)
+                            scale = gpc.get_world_size(ParallelMode.DATA) / scale_denominator
+
+                            return grad * scale
+                        return grad
+
                     # get the AccumulateGrad object of the param itself
                     # If these objects are not kept, reduction hooks may not be attached successfully.
                     accum_grad_obj = get_grad_accumulate_object(param)
@@ -365,6 +376,10 @@ class HybridZeroOptimizer(BaseOptimizer):
                         and gpc.config.parallel.weight.size > 1
                     ):
                         accum_grad_obj.register_hook(accum_grad_hook)
+
+                    if self._unbalance_micro_num:
+                        # 注意这个hook必须要在梯度累加之前被调用，所以不能采用在 accum_grad_obj 上注册hook，而是需要直接注册在param上
+                        param.register_hook(unbalance_micro_num_loss_scale_hook)
 
                     if self._overlap_sync_grad:
                         accum_grad_obj.register_hook(reduce_grad_hook)
