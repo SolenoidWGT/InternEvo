@@ -256,8 +256,19 @@ def weighted_sum(weight, value):
     return sums
 
 
-def cluster_load_balance():
+def _no_load_balance():
+    global_bsz = gpc.config.data.global_bsz
+    micro_bsz = gpc.config.data.micro_bsz
+    seq_len = gpc.config.data.seq_len
+    dp_size = gpc.get_world_size(ParallelMode.DATA)
 
+    if gpc.get_world_size(ParallelMode.PIPELINE) == 1:
+        gpc.config.data.micro_num = global_bsz // (micro_bsz * seq_len * dp_size)
+    else:
+        pass
+
+
+def _do_load_balance():
     peak_tflops = []
     capacities = []
     gpus_per_cluster = []
@@ -321,7 +332,7 @@ def cluster_load_balance():
 
     if gpc.get_world_size(ParallelMode.PIPELINE) == 1:
         gpc.config.data.micro_num = balance_results[gpc.get_cluster_local_rank()]
-        gpc.micro_num_list = np.array(balance_results)
+        gpc.micro_num_list = balance_results  # np.array(balance_results)
 
         print(
             f"Rank: {rank}, cluster_name: {cluster_name}, balance_results: {balance_results}, \
@@ -336,6 +347,13 @@ balance PP layer: {new_layer_num}"
         )
 
     return balance_results
+
+
+def cluster_load_balance():
+    if len(gpc.clusters) <= 1:
+        _no_load_balance()
+    else:
+        _do_load_balance()
 
 
 def pipeline_parallel_sharding_wrapper(

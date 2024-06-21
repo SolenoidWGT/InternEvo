@@ -176,6 +176,7 @@ class ParallelContext(metaclass=SingletonMeta):
         self._group_map = {}
         self.clusters = []
         self.micro_num_list = None
+        self.sorted_micro_num_list = None
 
     @property
     def config(self):
@@ -397,6 +398,11 @@ class ParallelContext(metaclass=SingletonMeta):
            port (str): the master port for distributed training.
            use_cpu (bool): whether to set up cpu process group.
         """
+        # find cluster info
+        if "clusters" in self.config:
+            for cluster in self.config.clusters:
+                self.clusters.append(ClusterInfo(**cluster))
+
         # initialize the default process group
         init_method = f"tcp://[{host}]:{port}"
         dist.init_process_group(
@@ -689,7 +695,7 @@ class ParallelContext(metaclass=SingletonMeta):
     def get_cluster_local_rank(self):
         devices_offset = 0
         for i, cluster in enumerate(self.clusters):
-            devices_offset += (cluster.gpu_per_node * cluster.node_num)
+            devices_offset += cluster.gpu_per_node * cluster.node_num
             print(f"devices_offset: {devices_offset}, cluster: {cluster}", flush=True)
             if self.get_global_rank() <= devices_offset:
                 return i
@@ -697,6 +703,40 @@ class ParallelContext(metaclass=SingletonMeta):
 
     def get_model_parallel_size(self):
         return self.get_world_size(ParallelMode.PIPELINE) * self.get_world_size(ParallelMode.TENSOR)
+
+    def get_loss_scale(self, now_accum_step):
+        micro_num = self.config.data.micro_num
+
+        assert now_accum_step < micro_num
+        if self.sorted_micro_num_list is None:
+            self.sorted_micro_num_list = sorted(self.micro_num_list)
+
+        def search_left_bound(nums, target):
+            if not nums:
+                return -1
+            left = 0
+            right = len(nums) - 1
+
+            while left <= right:
+                mid = left + (right - left) // 2
+                if nums[mid] > target:
+                    right = mid - 1
+                elif nums[mid] < target:
+                    left = mid + 1
+                elif nums[mid] == target:
+                    right = mid - 1
+
+            if left >= len(nums):
+                return -1
+            return left
+
+        left_accum_step = micro_num - now_accum_step
+        rdix = search_left_bound(self.sorted_micro_num_list, left_accum_step)
+        assert rdix != -1
+
+        # print(f"now_accum_step: {now_accum_step}, left_accum_step: {left_accum_step}, rdix: {rdix}")
+        scale = len(self.sorted_micro_num_list) - rdix
+        return scale
 
 
 global_context = ParallelContext()

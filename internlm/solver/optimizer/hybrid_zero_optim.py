@@ -346,11 +346,20 @@ class HybridZeroOptimizer(BaseOptimizer):
 
                     def unbalance_micro_num_loss_scale_hook(grad):  # pylint: disable=W0613
                         if self.skip_grad_reduce is True:  # 只在梯度累加的时候生效
-                            left_step = np.max(gpc.micro_num_list) - self.current_accum_step
-                            scale_denominator = np.sum(left_step >= gpc.micro_num_list)
-                            scale = gpc.get_world_size(ParallelMode.DATA) / scale_denominator
+                            # cluster_local_rank = gpc.get_cluster_local_rank()
 
-                            return grad * scale
+                            # gpc.micro_num_list[cluster_local_rank]
+
+                            # left_step = np.max(gpc.micro_num_list) - self.current_accum_step
+                            # scale_denominator = np.sum(left_step >= gpc.micro_num_list)
+                            scale_denominator = gpc.get_loss_scale(self.current_accum_step)
+                            dp_size = gpc.get_world_size(ParallelMode.DATA)
+                            if scale_denominator == dp_size:
+                                return grad
+                            else:
+                                scale = dp_size / scale_denominator
+                                return grad * scale
+
                         return grad
 
                     # get the AccumulateGrad object of the param itself

@@ -10,7 +10,7 @@ clusters = [
         "intra_bw": 150,
         "inter_bw": 100,
         "gpu_per_node": 8,
-        "node_num": 2,
+        "node_num": 1,
     },
     {
         "name": "mx",
@@ -19,7 +19,7 @@ clusters = [
         "intra_bw": 150,
         "inter_bw": 100,
         "gpu_per_node": 8,
-        "node_num": 2,
+        "node_num": 1,
     },
 ]
 
