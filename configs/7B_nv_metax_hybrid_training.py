@@ -2,36 +2,39 @@ JOB_NAME = "7b_internlm2_train"
 model_type = "INTERNLM2_PUBLIC"
 DO_ALERT = False
 
-clusters = [
-    {
-        "name": "nv",
-        "peak_tflops": 320,
-        "capacity": 80 * 1024**3,
-        "intra_bw": 150,
-        "inter_bw": 100,
-        "gpu_per_node": 8,
-        "node_num": 1,
-    },
-    {
-        "name": "mx",
-        "peak_tflops": 240,
-        "capacity": 64 * 1024**3,
-        "intra_bw": 150,
-        "inter_bw": 100,
-        "gpu_per_node": 8,
-        "node_num": 1,
-    },
-]
+DO_FUSED = True
+if DO_FUSED:
+    clusters = [
+        {
+            "name": "nv",
+            "peak_tflops": 320,
+            "capacity": 80 * 1024**3,
+            "intra_bw": 150,
+            "inter_bw": 100,
+            "gpu_per_node": 8,
+            "node_num": 1,
+        },
+        {
+            "name": "mx",
+            "peak_tflops": 240,
+            "capacity": 64 * 1024**3,
+            "intra_bw": 150,
+            "inter_bw": 100,
+            "gpu_per_node": 8,
+            "node_num": 1,
+        },
+    ]
 
 GLOBAL_BSZ = 4 * 1024**2
-VOCAB_SIZE = 92544
-SEQ_LEN = 2048
-HIDDEN_SIZE = 4096
-NUM_ATTENTION_HEAD = 32
+VOCAB_SIZE = 32000
+SEQ_LEN = 4096
+HIDDEN_SIZE = 2048
+NUM_ATTENTION_HEAD = 16
 NUM_KV_ATTENTION_HEAD = 8
-MLP_RATIO = 3.5
-NUM_LAYER = 32
-MICRO_SIZE = 1
+MULTIPLE_OF = 128
+MLP_RATIO = 4
+NUM_LAYER = 24
+MICRO_SIZE = 4
 MICRO_NUM = -1
 
 data = dict(

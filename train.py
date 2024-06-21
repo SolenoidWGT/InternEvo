@@ -49,7 +49,7 @@ from internlm.utils.gputest import empty_cache_and_diag
 from internlm.utils.logger import get_logger
 from internlm.utils.megatron_timers import megatron_timer as timer
 from internlm.utils.parallel import get_parallel_log_file_name
-from internlm.utils.simple_memory_profiler import SimpleMemoryProfiler
+# from internlm.utils.simple_memory_profiler import SimpleMemoryProfiler
 from internlm.utils.writer import Writer
 
 # global llm logger
@@ -159,17 +159,17 @@ def main(args):
     )
 
     # initialize simple memory profiler
-    if args.profiling:
-        memory_profiler = SimpleMemoryProfiler(
-            model,
-            optimizer.optim,
-            log_folder=f"RUN/{gpc.config.JOB_NAME}/{current_time}/memory_trace/rank{gpc.get_global_rank()}_"
-            + f"dp{gpc.get_local_rank(ParallelMode.DATA)}_"
-            + f"wp{gpc.get_local_rank(ParallelMode.WEIGHT)}_"
-            + f"tp{gpc.get_local_rank(ParallelMode.TENSOR)}",
-        )
-    else:
-        memory_profiler = None
+    # if args.profiling:
+    #     memory_profiler = SimpleMemoryProfiler(
+    #         model,
+    #         optimizer.optim,
+    #         log_folder=f"RUN/{gpc.config.JOB_NAME}/{current_time}/memory_trace/rank{gpc.get_global_rank()}_"
+    #         + f"dp{gpc.get_local_rank(ParallelMode.DATA)}_"
+    #         + f"wp{gpc.get_local_rank(ParallelMode.WEIGHT)}_"
+    #         + f"tp{gpc.get_local_rank(ParallelMode.TENSOR)}",
+    #     )
+    # else:
+    #     memory_profiler = None
 
     # initialize the batch skipper
     batch_skipper = BatchSkipper(skip_batches)
@@ -286,8 +286,8 @@ def main(args):
             if now_break:
                 break
 
-            if memory_profiler is not None:
-                memory_profiler.step()
+            # if memory_profiler is not None:
+            #     memory_profiler.step()
 
             if batch_count % 2 == 0:
                 prof.step()

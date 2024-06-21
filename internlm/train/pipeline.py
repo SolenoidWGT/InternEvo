@@ -472,7 +472,7 @@ def load_new_batch(train_dl: DataLoader, train_iter: Iterable, train_state: Trai
 def initialize_llm_profile(profiling: bool = False, start_time: str = None):
     """Initialize and return the profiler context manager instance."""
 
-    if profiling and gpc.get_local_rank(ParallelMode.DATA) == 0 and gpc.get_local_rank(ParallelMode.TENSOR) == 0:
+    if profiling and gpc.get_global_rank() == 0 or gpc.get_global_rank() == 8:
         schedule_config = {"wait": 1, "warmup": 1, "active": 1, "repeat": 1, "skip_first": 3}
         trace_path = (
             f"RUN/{gpc.config.JOB_NAME}/{start_time}/traces/rank{gpc.get_global_rank()}_"
