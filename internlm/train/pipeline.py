@@ -63,11 +63,15 @@ from internlm.model.ops.norm import RMSNorm
 from internlm.model.registry import register_model_initializer
 from internlm.monitor import set_env_var
 from internlm.monitor.monitor import monitor_manager as mm
-from internlm.solver.optimizer import FSDPadaptOptimizer, HybridZeroOptimizer
+from internlm.solver.optimizer import (
+    FSDPadaptOptimizer,
+    HybridZeroOptimizer,
+    HybridZeroOptimizer_v2,
+)
 from internlm.solver.optimizer.compatible_adamw import new_compatible_adamw
 from internlm.solver.schedulers.beta2_scheduler import Beta2Scheduler
 from internlm.solver.schedulers.lr_scheduler import FineTuneCosineAnnealingWarmupLR
-from internlm.train.utils import create_param_groups
+from internlm.train.utils import create_param_groups, map_param_block
 from internlm.utils.common import DummyProfile, SchedulerHook, get_current_device
 from internlm.utils.logger import get_logger
 from internlm.utils.megatron_timers import megatron_timer as timer
@@ -141,10 +145,21 @@ def set_parallel_attr_for_param_groups(model: Union[nn.Module, nn.ModuleList]):
             for param in module.parameters():
                 setattr(param, IS_REPLICA_ZERO_PARALLEL, True)
 
+    def _check_module_hf(_, module):
+        # TODO: check parallel attribute for hf model
+        for param in module.parameters():
+            if gpc.is_initialized(ParallelMode.TENSOR) and is_using_isp():
+                setattr(param, IS_TENSOR_DATA_PARALLEL, True)
+            elif gpc.is_initialized(ParallelMode.TENSOR) and not is_using_isp():
+                setattr(param, IS_TENSOR_ZERO_PARALLEL, True)
+
     for _chunk in unwrap_naive_amp(model):
         # set param parallel attribute
         for name, module in _chunk.named_modules():
-            _check_module(name, module)
+            if gpc.config.model_type == "hf":
+                _check_module_hf(name, module)
+            else:
+                _check_module(name, module)
 
         for name, param in _chunk.named_parameters():
             assert (
@@ -341,6 +356,9 @@ def initialize_optimizer(model: Union[nn.Module, nn.ModuleList], isp_communicato
     zero_cfg = gpc.config.hybrid_zero_optimizer
     grad_scal_cfg = gpc.config.grad_scaler
 
+    if "use_split_tensor_optim" in zero_cfg and zero_cfg.use_split_tensor_optim:
+        map_param_block(model)
+
     params = create_param_groups(model, adam_cfg.weight_decay)
 
     naive_optimizer = new_compatible_adamw(
@@ -370,13 +388,25 @@ def initialize_optimizer(model: Union[nn.Module, nn.ModuleList], isp_communicato
         param_bcast_sync_handler = None
 
     if not gpc.config.parallel.zero1.fsdp:
-        optimizer = HybridZeroOptimizer(
-            naive_optimizer,
-            grad_scal_cfg=grad_scal_cfg,
-            zero_cfg=zero_cfg,
-            param_bcast_sync_handler=param_bcast_sync_handler,
-            isp_communicator=isp_communicator,
-        )
+        if (
+            "use_split_tensor_optim" not in gpc.config.hybrid_zero_optimizer
+            or not gpc.config.hybrid_zero_optimizer.use_split_tensor_optim
+        ):
+            optimizer = HybridZeroOptimizer(
+                naive_optimizer,
+                grad_scal_cfg=grad_scal_cfg,
+                zero_cfg=zero_cfg,
+                param_bcast_sync_handler=param_bcast_sync_handler,
+                isp_communicator=isp_communicator,
+            )
+        else:
+            optimizer = HybridZeroOptimizer_v2(
+                naive_optimizer,
+                grad_scal_cfg=grad_scal_cfg,
+                zero_cfg=zero_cfg,
+                param_bcast_sync_handler=param_bcast_sync_handler,
+                isp_communicator=isp_communicator,
+            )
     else:
         optimizer = FSDPadaptOptimizer(
             naive_optimizer,
@@ -445,7 +475,8 @@ def load_new_batch(train_dl: DataLoader, train_iter: Iterable, train_state: Trai
     if batch[0].get("type_ids", None) is not None:
         # if use_packed_dataset is False, we need to unpack type_ids
         if not gpc.config.data.use_packed_dataset:
-            batch[0]["type_ids"] = unpack_type_ids(batch[0]["type_ids"], batch[0]["cu_seqlens"])
+            if gpc.config.data.type != "hf" or gpc.config.model_type != "hf":
+                batch[0]["type_ids"] = unpack_type_ids(batch[0]["type_ids"], batch[0]["cu_seqlens"])
 
     return batch, train_iter
 
@@ -535,10 +566,17 @@ def record_current_batch_training_metrics(
 
         num_tokens_in_batch = batch[1].nelement()
         real_num_tokens = math.ceil(acc_perplex.pop("real_token_num") / gpc.get_world_size(ParallelMode.GLOBAL))
-        num_samples_in_batch = sum([len(b) - 1 for b in batch[0]["cu_seqlens"]])
-        max_length_in_batch = max([(b[1:] - b[:-1]).max().item() for b in batch[0]["cu_seqlens"]])
-        max_samples_in_batch = max([len(b) - 1 for b in batch[0]["cu_seqlens"]])
-        min_samples_in_batch = min([len(b) - 1 for b in batch[0]["cu_seqlens"]])
+        # TODO: check logic
+        if gpc.config.data.type == "hf" and gpc.config.model_type == "hf" and not gpc.config.data.use_packed_dataset:
+            num_samples_in_batch = gpc.config.data.micro_bsz * gpc.config.data.micro_num
+            max_length_in_batch = batch[0]["attention_mask"].sum(dim=1).max().item()
+            max_samples_in_batch = gpc.config.data.micro_bsz
+            min_samples_in_batch = gpc.config.data.micro_bsz
+        else:
+            num_samples_in_batch = sum([len(b) - 1 for b in batch[0]["cu_seqlens"]])
+            max_length_in_batch = max([(b[1:] - b[:-1]).max().item() for b in batch[0]["cu_seqlens"]])
+            max_samples_in_batch = max([len(b) - 1 for b in batch[0]["cu_seqlens"]])
+            min_samples_in_batch = min([len(b) - 1 for b in batch[0]["cu_seqlens"]])
         time_cost = time.time() - start_time
         tk_per_gpu = round(
             num_tokens_in_batch * gpc.get_world_size(ParallelMode.DATA) / gpc.get_world_size(ParallelMode.GLOBAL),
@@ -627,6 +665,8 @@ def record_current_batch_training_metrics(
 
         fwd_bwd_time = round(timer("fwd-bwd").elapsed(), 2)
         infos["fwd_bwd_time"] = fwd_bwd_time
+        bwd_time = round(timer("bwd").elapsed(), 2)
+        infos["bwd_time"] = bwd_time
 
         for key, value in acc_perplex.items():
             infos[key] = value
