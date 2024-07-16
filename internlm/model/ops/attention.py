@@ -276,6 +276,7 @@ def _npu_fixedlen_qkvsplited_attn(
         q, k, v = q.squeeze(dim=2), k.squeeze(dim=2), v.squeeze(dim=2)
 
     _, seqlen, n_head, _ = q.shape
+    sparse_mode = 0
     attention_mask = torch.triu(torch.ones(seqlen, seqlen, device=get_current_device()), 1).bool()
 
     return _origin_npu_fixedlen_qkvsplited_func(
@@ -287,7 +288,7 @@ def _npu_fixedlen_qkvsplited_attn(
         pse=None,
         atten_mask=attention_mask,
         scale=softmax_scale,
-        sparse_mode=0,  # If necessary, expose the interface
+        sparse_mode=sparse_mode,  # If necessary, expose the interface
         pre_tockens=seqlen,  # Used for sparse calculations, representing the left boundary of the slides window
         next_tockens=0,  # If necessary, expose the interface
         keep_prob=1 - dropout_p,
@@ -316,6 +317,13 @@ def _npu_fused_varlen_qkvsplited_attn(
 
     S, N = max(max_seqlen_q, max_seqlen_k), q.shape[1]
     device = get_current_device()
+    sparse_mode = 0
+
+    if max_seqlen_k > 2048 and max_seqlen_q > 2048:
+        sparse_mode = 2
+        max_seqlen_k = 2048
+        max_seqlen_q = 2048
+
     attention_mask = torch.triu(torch.ones(max_seqlen_q, max_seqlen_k, device=device), 1).bool()
     cu_seqlens_q = cu_seqlens_q[1:].tolist()
     cu_seqlens_kv = cu_seqlens_kv[1:].tolist()
@@ -329,7 +337,7 @@ def _npu_fused_varlen_qkvsplited_attn(
         pse=None,
         atten_mask=attention_mask,
         scale=softmax_scale,
-        sparse_mode=0,
+        sparse_mode=sparse_mode,
         pre_tockens=S,  # Used for sparse calculations, representing the left boundary of the slides window
         next_tockens=0,
         keep_prob=1 - dropout_p,
