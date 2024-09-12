@@ -12,7 +12,7 @@ import torch
 from internlm.accelerator import AcceleratorType, get_accelerator
 from internlm.core.context import Config
 from internlm.core.context import global_context as gpc
-from internlm.core.context.process_group_initializer_simplified import ParallelMode
+from internlm.core.context.process_group_initializer import ParallelMode
 from internlm.utils.common import get_master_node
 from internlm.utils.gputest import warmup_process_group
 from internlm.utils.logger import get_logger
@@ -86,7 +86,8 @@ If not, it will only calculate the estimated TGS based on the parallel configura
     group.add_argument(
         "--pre_profiling_data_path", type=str, help="The path to pre-profiled performance data on the target cluster."
     )
-    group.add_argument("--use_simplified_gp_init", action="store_true", default=False)
+    group.add_argument("--use_simplified_gp_init", action="store_true", default=True)
+
     return parser
 
 

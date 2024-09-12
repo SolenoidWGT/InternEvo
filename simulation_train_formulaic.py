@@ -12,6 +12,7 @@ from internlm.core.context import Config, ParallelMode
 from internlm.core.context import global_context as gpc
 from internlm.core.context.random import reset_seed
 from internlm.core.parallel.shard import cluster_load_balance, partition_uniform
+from internlm.initialize import get_default_parser
 from internlm.initialize.launch import args_sanity_check, launch
 from internlm.simulator.common import AlgoType, cal_block_p_elem, cal_model_p_elem
 
@@ -82,6 +83,8 @@ def comm_dp_cost(dtype_size, algo, pp_blocks_elem, embedding_elem, zp) -> float:
         block_zp_latency = zp * broadcast(dtype_size * pp_blocks_elem / zp, ParallelMode.ZERO1, comm_nums=zp)
         embedding_zp_latency = broadcast(dtype_size * embedding_elem, ParallelMode.DATA)
         zp_latency = max(block_zp_latency, embedding_zp_latency)
+    else:
+        raise ValueError(f"Invalid algo type: {algo}")
 
     return zp_latency, wdp_latency
 
@@ -384,15 +387,19 @@ os_mm_cost: {os_mm_cost/1024**3:.2f} GB, activation: {activation/1024**3:.2f} GB
 def run_loop(
     global_bsz,
     world_size,
-    args,
+    config_path,
     use_fixed_micro_bsz=False,
     use_strict_bsz=True,
     global_bsz_max=1,
     global_bsz_min=1,
     debug=True,
 ):
-    gpc.load_config(config=Config.from_file(args.config))
+    gpc.load_config(config=Config.from_file(config_path))
     gpc.set_fake_mode(True)
+
+    if "multiple_of" not in gpc.config.model:
+        gpc.config.model["multiple_of"] = 256
+        print(f"multiple_of not in config, use default value: {gpc.config.model.multiple_of}")
 
     min_comm_cost, msp_min_cost, fsp_min_cost, isp_min_cost = (
         float("inf"),
@@ -566,9 +573,9 @@ micro_bsz: {micro_bsz}, pp: {pp}, wp: {wp}, zp: {zp}, sp: {sp}, {str(algo_type)}
     return solutions_list, min_comm_cost, min_cost_solution, msp_min_solu, fsp_min_solu, isp_min_solu
 
 
-def run_warrper(global_bsz, world_size, args):
+def run_warrper(world_size, global_bsz, config_path):
     solutions_list, min_comm_cost, min_cost_solution, msp_min_solu, fsp_min_solu, isp_min_solu = run_loop(
-        global_bsz=global_bsz, world_size=world_size, args=args
+        global_bsz=global_bsz, world_size=world_size, config_path=config_path
     )
 
     if min_cost_solution is not None:
@@ -606,7 +613,17 @@ def run_warrper(global_bsz, world_size, args):
         print("No solution found")
 
 
-def run_single(global_bsz=4 * 1024 * 1024):
+def get_world_size():
+    if "WORLD_SIZE" in os.environ:
+        return int(os.environ["WORLD_SIZE"])
+    else:
+        if "SLURM_NTASKS" in os.environ:
+            return int(os.environ["SLURM_NTASKS"])
+        else:
+            return 1
+
+
+def run_single(world_size, global_bsz=4 * 1024 * 1024):
     gpc.load_config(config=Config.from_file(args.config))
     gpc.set_fake_mode(True)
     print(f"gpc.config.parallel: {gpc.config.parallel}")
@@ -675,17 +692,19 @@ def run_single(global_bsz=4 * 1024 * 1024):
 
 
 if __name__ == "__main__":
-    args = parse_args()
-    hostname = socket.gethostname()
-    world_size = args.world_size
+    parser = get_default_parser()
+    args = parser.parse_args()
 
-    init_cost_model(get_args().pre_profiling_data_path)
+    hostname = socket.gethostname()
+    global_batch_size = args.global_batch_size
+
+    init_cost_model(args.pre_profiling_data_path)
 
     os.environ["fake_mode"] = "1"
     gloab_allocator.init_capcity = 80 * 1024**3
     gloab_allocator.capcity = 80 * 1024**3
 
-    if get_args().run_all_solu:
-        run_warrper(4096 * 1024, world_size, args)
+    if args.run_all_solu:
+        run_warrper(args.world_size, args.global_batch_size, args.config)
     else:
-        run_single(get_args().global_batch_size)
+        run_single(args.world_size, args.global_batch_size)

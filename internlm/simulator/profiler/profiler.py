@@ -234,24 +234,7 @@ def draw_pics(base_path, plot_name, comm_vols, bws):
 
 
 def draw_cal_pics(base_path, plot_name, tflop, tflops):
-    # x, y = [], []
-
     spline_model = interp1d(tflop, tflops, kind="slinear")
-
-    # start = tflop[0]
-    # end = tflop[-1]
-    # for complexity in range(start, end+1):
-    #     try:
-    #         predice_tflops = spline_model(complexity)
-    #     except ValueError:
-    #         if complexity < tflop[0]:
-    #             predice_tflops = spline_model(tflop[0])
-    #         elif complexity > tflop[-1]:
-    #             predice_tflops = spline_model(tflop[-1])
-
-    #     x.append(complexity)
-    #     y.append(predice_tflops)
-
     pic_path = os.path.join(base_path, plot_name + ".jpg")
     tflop = list(map(lambda x: x / 10**12, tflop))
     tflops = list(map(lambda x: x / 10**12, tflops))

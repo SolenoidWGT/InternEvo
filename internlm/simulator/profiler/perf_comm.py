@@ -125,7 +125,8 @@ def gen_perf():
     )
     group = dist.GroupMember.WORLD
 
-    gpc._register_dist(rank, world_size, group, None, list(range(world_size)), ParallelMode.GLOBAL)
+    # local_rank, world_size, process_group, cpu_group, ranks_in_group, all_ranks, mode
+    gpc._register_dist(rank, world_size, group, None, list(range(world_size)), list(range(world_size)), ParallelMode.GLOBAL)
     gpc._global_ranks[ParallelMode.GLOBAL] = rank
     gpc.set_device(local_rank)
 
@@ -162,29 +163,30 @@ def gen_perf():
 
     sync_all()
 
-    for i in range(inter_comm_nums):
-        for j in range(intra_comm_nums):
-            inter_size, intra_size = 2**i, 2**j
-            if inter_size * intra_size != 1:
+    for test_op in comm_test_list:
+        for i in range(inter_comm_nums):
+            for j in range(intra_comm_nums):
+                inter_size, intra_size = 2**i, 2**j
+                if inter_size * intra_size != 1:
 
-                x_idx, y_idx = get_group_id(rank, gpus_per_node, intra_size, inter_size)
-                groups = new_process_group(world_size, gpus_per_node, intra_size, inter_size)
+                    x_idx, y_idx = get_group_id(rank, gpus_per_node, intra_size, inter_size)
+                    groups = new_process_group(world_size, gpus_per_node, intra_size, inter_size)
 
-                for test_type in comm_test_list:
-                    key = gen_comm_key(test_op, intra_size, inter_size)
-                    if dist.get_rank() == 0:
-                        print(
-                            f"key: {key}, inter_size: {inter_size}, intra_size: {intra_size}, ranks: {groups[y_idx][x_idx][1]}",
-                            flush=True,
-                        )
-                    pg = groups[y_idx][x_idx][0]
-                    assert (
-                        pg != -100
-                    ), f"key: {key}, x_idx: {x_idx}, y_idx: {y_idx}, rank: {gpc.get_global_rank()}, ranks: {groups[y_idx][x_idx][1]}"
-                    comm_vols, bws = run_comm_profile(test_type, pg, key)
-                    sync_all()
-                    if dist.get_rank() == 0:
-                        spline_model_dict[key] = draw_pics(comm_pic_path, key, comm_vols, bws)
+                    for test_type in comm_test_list:
+                        key = gen_comm_key(test_op, intra_size, inter_size)
+                        if dist.get_rank() == 0:
+                            print(
+                                f"key: {key}, inter_size: {inter_size}, intra_size: {intra_size}, ranks: {groups[y_idx][x_idx][1]}",
+                                flush=True,
+                            )
+                        pg = groups[y_idx][x_idx][0]
+                        assert (
+                            pg != -100
+                        ), f"key: {key}, x_idx: {x_idx}, y_idx: {y_idx}, rank: {gpc.get_global_rank()}, ranks: {groups[y_idx][x_idx][1]}"
+                        comm_vols, bws = run_comm_profile(test_type, pg, key)
+                        sync_all()
+                        if dist.get_rank() == 0:
+                            spline_model_dict[key] = draw_pics(comm_pic_path, key, comm_vols, bws)
 
     print(f"rank: {gpc.get_global_rank()}, all done!", flush=True)
 

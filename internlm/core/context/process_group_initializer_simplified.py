@@ -2,13 +2,11 @@
 # -*- encoding: utf-8 -*-
 
 from copy import deepcopy
-from enum import Enum
 
 import torch
 import torch.distributed as dist
 
 from internlm.utils.timeout import LLM_NCCL_TIMEOUT
-from internlm.core.context.process_group_initializer import ParallelMode
 
 class ParallelMeta:
     def __init__(self, parallel_size, mode) -> None:
